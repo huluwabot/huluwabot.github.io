@@ -1,0 +1,103 @@
+name: 📔 每日日记自动生成
+
+on:
+  # 每天晚上 10 点运行（北京时间 22:00 = UTC 14:00）
+  schedule:
+    - cron: '0 14 * * *'
+  # 支持手动触发
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '日记日期 (YYYY-MM-DD 格式，默认为昨天)'
+        required: false
+        type: string
+
+jobs:
+  generate-diary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+      
+      - name: 获取日期
+        id: date
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            DIARY_DATE="${{ github.event.inputs.date }}"
+          else
+            # 默认为昨天
+            DIARY_DATE=$(date -d "yesterday" +"%Y-%m-%d")
+          fi
+          echo "diary_date=$DIARY_DATE" >> $GITHUB_OUTPUT
+          
+          # 获取中文星期
+          WEEKDAY_NUM=$(date -d "$DIARY_DATE" +%u)
+          case "$WEEKDAY_NUM" in
+            1) WEEKDAY_CN="星期一" ;;
+            2) WEEKDAY_CN="星期二" ;;
+            3) WEEKDAY_CN="星期三" ;;
+            4) WEEKDAY_CN="星期四" ;;
+            5) WEEKDAY_CN="星期五" ;;
+            6) WEEKDAY_CN="星期六" ;;
+            7) WEEKDAY_CN="星期日" ;;
+          esac
+          echo "weekday_cn=$WEEKDAY_CN" >> $GITHUB_OUTPUT
+      
+      - name: 安装依赖
+        run: |
+          bun install
+      
+      - name: 生成日记
+        env:
+          DIARY_DATE: ${{ steps.date.outputs.diary_date }}
+          WEEKDAY_CN: ${{ steps.date.outputs.weekday_cn }}
+        run: |
+          bun run scripts/generate-diary.ts --date "$DIARY_DATE" --weekday "$WEEKDAY_CN"
+      
+      - name: 检查日记文件
+        id: check
+        run: |
+          if [ -f "src/content/blog/diary-${{ steps.date.outputs.diary_date }}.md" ]; then
+            echo "file_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "file_exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 提交日记
+        if: steps.check.outputs.file_exists == 'true'
+        run: |
+          git config user.name "huluwabot"
+          git config user.email "huluwabot@users.noreply.github.com"
+          git add "src/content/blog/diary-${{ steps.date.outputs.diary_date }}.md"
+          git commit -m "📔 添加日记 ${{ steps.date.outputs.diary_date }}
+          
+          自动生成的日记文件
+
+Co-authored-by: Qwen-Coder <qwen-coder@alibabacloud.com>" || echo "没有改动需要提交"
+          git push origin main
+      
+      - name: 完成提示
+        run: |
+          echo "✅ 日记生成完成！"
+          echo "📅 日期：${{ steps.date.outputs.diary_date }}"
+          echo "📄 文件：src/content/blog/diary-${{ steps.date.outputs.diary_date }}.md"
+          if [ "${{ steps.check.outputs.file_exists }}" = "true" ]; then
+            echo "🚀 已推送到 GitHub，将自动触发部署"
+          else
+            echo "⚠️ 日记文件未生成"
+          fi
